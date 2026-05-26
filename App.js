@@ -1,20 +1,38 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { PaperProvider } from 'react-native-paper';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+import ScannerScreen from './src/screens/ScannerScreen';
+import OnboardingScreen from './src/screens/OnboardingScreen';
+import ConsentScreen from './src/screens/ConsentScreen';
+
+const Stack = createNativeStackNavigator();
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.js to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <PaperProvider>
+      <SafeAreaProvider>
+        <NavigationContainer>
+          <Stack.Navigator initialRouteName="Scanner">
+            <Stack.Screen
+              name="Scanner"
+              component={ScannerScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="Onboarding"
+              component={OnboardingScreen}
+              options={{ title: 'Verify Device' }}
+            />
+            <Stack.Screen
+              name="Consent"
+              component={ConsentScreen}
+              options={{ title: 'Privacy Consent' }}
+            />
+          </Stack.Navigator>
+        </NavigationContainer>
+      </SafeAreaProvider>
+    </PaperProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
