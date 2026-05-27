@@ -1,41 +1,74 @@
-import { useState } from 'react';
+import { useState, useContext } from 'react';
 import { View, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
-import { Text, TextInput, Button, HelperText } from 'react-native-paper';
+import { Text, TextInput, Button, HelperText, Snackbar } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { AuthContext } from '../../App';
+import { api } from '../services/api';
+import { storage } from '../services/storage';
 
 export default function OnboardingScreen({ navigation, route }) {
-  const { sessionToken } = route.params;
+  const { isAuthenticated, signIn } = useContext(AuthContext);
+  const { sessionToken, merchantId, signedToken } = route.params || {};
+
   const [mobileNumber, setMobileNumber] = useState('');
   const [otp, setOtp] = useState('');
+  const [otpRef, setOtpRef] = useState('');
   const [sendingOtp, setSendingOtp] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSendOtp = () => {
+  const handleSendOtp = async () => {
     if (!mobileNumber.trim()) {
       setError('Please enter a mobile number');
       return;
     }
     setError('');
     setSendingOtp(true);
-    setTimeout(() => {
-      setSendingOtp(false);
+
+    try {
+      const result = await api.sendOtp(mobileNumber.trim());
+      setOtpRef(result.otp_ref);
       setOtpSent(true);
-    }, 1500);
+    } catch (e) {
+      setError(e.message || 'Failed to send OTP');
+    } finally {
+      setSendingOtp(false);
+    }
   };
 
-  const handleVerifyOtp = () => {
-    if (!otp.trim() || otp.length !== 4) {
-      setError('Please enter a valid 4-digit OTP');
+  const handleVerifyOtp = async () => {
+    if (!otp.trim() || otp.length < 4) {
+      setError('Please enter a valid OTP');
       return;
     }
     setError('');
     setVerifying(true);
-    setTimeout(() => {
+
+    try {
+      const deviceId = await storage.getDeviceId();
+      const result = await api.verifyOtp(
+        mobileNumber.trim(),
+        otp.trim(),
+        otpRef,
+        deviceId,
+        Platform.OS === 'web' ? 'Web Browser' : 'Mobile Device',
+      );
+
+      if (!isAuthenticated) {
+        await signIn(result.access_token, result.refresh_token, result.user_id);
+      }
+
+      navigation.replace('Consent', {
+        sessionToken,
+        merchantId,
+        signedToken,
+      });
+    } catch (e) {
+      setError(e.message || 'OTP verification failed');
+    } finally {
       setVerifying(false);
-      navigation.replace('Consent', { sessionToken });
-    }, 1000);
+    }
   };
 
   return (
@@ -75,14 +108,14 @@ export default function OnboardingScreen({ navigation, route }) {
         {otpSent && (
           <>
             <TextInput
-              label="4-Digit OTP"
+              label="One-Time Passcode"
               value={otp}
               onChangeText={(text) => { setOtp(text); setError(''); }}
               keyboardType="number-pad"
               mode="outlined"
               style={styles.input}
-              maxLength={4}
-              placeholder="1234"
+              maxLength={6}
+              placeholder="123456"
             />
 
             <Button

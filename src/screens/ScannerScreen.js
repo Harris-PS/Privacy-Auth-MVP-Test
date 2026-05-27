@@ -1,13 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useContext } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Button, Text, ActivityIndicator, Surface, IconButton } from 'react-native-paper';
+import { Button, Text, ActivityIndicator, Surface, Snackbar } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { AuthContext } from '../../App';
+import { api } from '../services/api';
+import { storage } from '../services/storage';
 
 export default function ScannerScreen({ navigation }) {
+  const { isAuthenticated } = useContext(AuthContext);
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [error, setError] = useState('');
   const scannerActive = useRef(true);
 
   useEffect(() => {
@@ -15,25 +20,58 @@ export default function ScannerScreen({ navigation }) {
     return () => { scannerActive.current = false; };
   }, []);
 
-  const handleBarCodeScanned = ({ data }) => {
+  const handleBarCodeScanned = async ({ data }) => {
     if (!scannerActive.current || validating) return;
     setScanned(true);
     setValidating(true);
+    setError('');
 
-    setTimeout(() => {
-      if (!scannerActive.current) return;
-      const isNewCustomer = Math.random() > 0.5;
-      if (isNewCustomer) {
-        navigation.replace('Onboarding', { sessionToken: data });
-      } else {
-        navigation.replace('Consent', { sessionToken: data });
+    try {
+      let qrData;
+      try {
+        qrData = JSON.parse(data);
+      } catch {
+        throw new Error('Invalid QR code format');
       }
-    }, 1000);
+
+      const { session_token, signed_token } = qrData;
+      if (!session_token || !signed_token) {
+        throw new Error('Invalid QR payload');
+      }
+
+      const result = await api.validateSession(session_token, signed_token);
+
+      if (!result.valid) {
+        throw new Error(result.error || 'Invalid session');
+      }
+
+      if (!scannerActive.current) return;
+
+      if (result.onboarding_required) {
+        navigation.replace('Onboarding', {
+          sessionToken: session_token,
+          merchantId: result.merchant_id,
+          signedToken: signed_token,
+        });
+      } else {
+        navigation.replace('Consent', {
+          sessionToken: session_token,
+          merchantId: result.merchant_id,
+          merchantName: result.merchant_name,
+          signedToken: signed_token,
+        });
+      }
+    } catch (e) {
+      if (!scannerActive.current) return;
+      setError(e.message || 'Session validation failed');
+      setValidating(false);
+    }
   };
 
   const handleReset = () => {
     setScanned(false);
     setValidating(false);
+    setError('');
   };
 
   if (!permission) {
@@ -73,18 +111,6 @@ export default function ScannerScreen({ navigation }) {
         onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
         barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
       />
-      
-      {/* Back/Close Button Overlay */}
-      <View style={styles.topBar}>
-        <IconButton
-          icon="close"
-          iconColor="#fff"
-          size={30}
-          onPress={() => navigation.goBack()}
-          style={styles.closeButton}
-        />
-      </View>
-
       {validating && (
         <Surface style={styles.overlay} elevation={4}>
           <ActivityIndicator size="large" />
@@ -93,18 +119,22 @@ export default function ScannerScreen({ navigation }) {
           </Text>
         </Surface>
       )}
-      
-      {!validating && !scanned && (
-        <Surface style={styles.instructions} elevation={2}>
-          <Text variant="bodyLarge">Point your camera at the QR code</Text>
-        </Surface>
-      )}
-
-      {scanned && !validating && (
-        <Button mode="contained" onPress={handleReset} style={styles.rescanButton}>
+      <Surface style={styles.instructions} elevation={2}>
+        <Text variant="bodyLarge">Point your camera at the QR code</Text>
+      </Surface>
+      {scanned && !validating && !error && (
+        <Button mode="outlined" onPress={handleReset} style={styles.rescanButton}>
           Tap to Scan Again
         </Button>
       )}
+      <Snackbar
+        visible={!!error}
+        onDismiss={() => setError('')}
+        action={{ label: 'OK', onPress: handleReset }}
+        duration={4000}
+      >
+        {error}
+      </Snackbar>
     </SafeAreaView>
   );
 }
@@ -112,23 +142,12 @@ export default function ScannerScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
-  },
-  topBar: {
-    position: 'absolute',
-    top: 40,
-    left: 10,
-    zIndex: 10,
-  },
-  closeButton: {
-    backgroundColor: 'rgba(0,0,0,0.4)',
   },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
-    backgroundColor: '#fff',
   },
   subtitle: {
     marginTop: 8,
@@ -157,11 +176,10 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
   },
   rescanButton: {
     position: 'absolute',
-    bottom: 40,
+    bottom: 24,
     alignSelf: 'center',
   },
 });

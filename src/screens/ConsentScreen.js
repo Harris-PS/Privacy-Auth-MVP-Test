@@ -1,24 +1,109 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { View, StyleSheet, Alert } from 'react-native';
-import { Card, Text, Button, Snackbar } from 'react-native-paper';
+import { Card, Text, Button, Snackbar, Dialog, Portal, TextInput } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { api } from '../services/api';
+import { storage } from '../services/storage';
+import { biometric } from '../services/biometric';
 
-export default function ConsentScreen({ navigation }) {
+export default function ConsentScreen({ navigation, route }) {
+  const { sessionToken, merchantId, merchantName: routeMerchantName, signedToken } = route.params || {};
+
+  const [merchantName] = useState(routeMerchantName || 'Coffee Shop POS');
+  const [loading, setLoading] = useState(false);
   const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
+  const [pinDialogVisible, setPinDialogVisible] = useState(false);
+  const [pin, setPin] = useState('');
+  const [pendingAction, setPendingAction] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const details = await api.getConsentDetails(sessionToken, merchantId);
+        if (details) {
+          console.log('Consent details loaded');
+        }
+      } catch (e) {
+        console.log('Using fallback consent details');
+      }
+    })();
+  }, []);
+
+  const verifyBiometricOrPin = async (action) => {
+    const bioAvailable = await biometric.isAvailable();
+    if (bioAvailable) {
+      const authenticated = await biometric.authenticate();
+      if (authenticated) {
+        await executeAction(action);
+        return;
+      }
+    }
+
+    const hasPin = await storage.hasAppPin();
+    if (hasPin) {
+      setPendingAction(action);
+      setPinDialogVisible(true);
+      return;
+    }
+
+    await executeAction(action);
+  };
+
+  const handlePinSubmit = async () => {
+    const storedPin = await storage.getAppPin();
+    if (pin === storedPin) {
+      setPinDialogVisible(false);
+      setPin('');
+      await executeAction(pendingAction);
+    } else {
+      Alert.alert('Error', 'Incorrect PIN');
+    }
+  };
+
+  const executeAction = async (action) => {
+    setLoading(true);
+    try {
+      if (action === 'approve') {
+        const result = await api.approveConsent(sessionToken, merchantId);
+        setSnackbarMessage(result.message || 'Identity Tokenized & Consent Submitted to Backend');
+        setSnackbarVisible(true);
+        setTimeout(() => {
+          setSnackbarVisible(false);
+          navigation.reset({ index: 0, routes: [{ name: 'Scanner' }] });
+        }, 2000);
+      } else {
+        const result = await api.rejectConsent(sessionToken, merchantId);
+        setSnackbarMessage(result.message || 'Session Cancelled');
+        setSnackbarVisible(true);
+        setTimeout(() => {
+          setSnackbarVisible(false);
+          navigation.reset({ index: 0, routes: [{ name: 'Scanner' }] });
+        }, 1500);
+      }
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Request failed');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleApprove = () => {
-    setSnackbarVisible(true);
-    setTimeout(() => {
-      setSnackbarVisible(false);
-      navigation.reset({ index: 0, routes: [{ name: 'Scanner' }] });
-    }, 2000);
+    verifyBiometricOrPin('approve');
   };
 
   const handleReject = () => {
     Alert.alert(
-      'Session Cancelled',
-      'Your session has been cancelled. No data was shared.',
-      [{ text: 'OK', onPress: () => navigation.reset({ index: 0, routes: [{ name: 'Scanner' }] }) }]
+      'Reject Consent',
+      'Are you sure you want to cancel this session?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: () => executeAction('reject'),
+        },
+      ]
     );
   };
 
@@ -32,7 +117,7 @@ export default function ConsentScreen({ navigation }) {
         <Card style={styles.card} mode="elevated">
           <Card.Content>
             <Text variant="labelLarge" style={styles.sectionLabel}>Merchant</Text>
-            <Text variant="titleMedium" style={styles.value}>Coffee Shop POS</Text>
+            <Text variant="titleMedium" style={styles.value}>{merchantName}</Text>
 
             <Text variant="labelLarge" style={styles.sectionLabel}>Amount</Text>
             <Text variant="titleMedium" style={styles.value}>$4.50</Text>
@@ -53,6 +138,8 @@ export default function ConsentScreen({ navigation }) {
           <Button
             mode="contained"
             onPress={handleApprove}
+            loading={loading}
+            disabled={loading}
             style={styles.approveButton}
             contentStyle={styles.buttonContent}
           >
@@ -61,6 +148,7 @@ export default function ConsentScreen({ navigation }) {
           <Button
             mode="outlined"
             onPress={handleReject}
+            disabled={loading}
             style={styles.rejectButton}
             contentStyle={styles.buttonContent}
           >
@@ -69,12 +157,33 @@ export default function ConsentScreen({ navigation }) {
         </View>
       </View>
 
+      <Portal>
+        <Dialog visible={pinDialogVisible} onDismiss={() => setPinDialogVisible(false)}>
+          <Dialog.Title>Enter PIN</Dialog.Title>
+          <Dialog.Content>
+            <TextInput
+              label="PIN"
+              value={pin}
+              onChangeText={setPin}
+              keyboardType="number-pad"
+              secureTextEntry
+              mode="outlined"
+              maxLength={6}
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setPinDialogVisible(false)}>Cancel</Button>
+            <Button onPress={handlePinSubmit}>Confirm</Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+
       <Snackbar
         visible={snackbarVisible}
         onDismiss={() => setSnackbarVisible(false)}
         duration={2000}
       >
-        Identity Tokenized & Consent Submitted to Backend
+        {snackbarMessage}
       </Snackbar>
     </SafeAreaView>
   );
